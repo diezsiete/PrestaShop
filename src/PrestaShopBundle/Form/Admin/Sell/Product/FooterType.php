@@ -30,13 +30,14 @@ namespace PrestaShopBundle\Form\Admin\Sell\Product;
 
 use PrestaShop\PrestaShop\Adapter\Shop\Url\ProductPreviewProvider;
 use PrestaShop\PrestaShop\Adapter\Shop\Url\ProductProvider;
+use PrestaShop\PrestaShop\Core\Feature\FeatureInterface;
 use PrestaShopBundle\Form\Admin\Type\IconButtonType;
 use PrestaShopBundle\Form\Admin\Type\TranslatorAwareType;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\FormBuilderInterface;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 use Symfony\Component\Routing\RouterInterface;
-use Symfony\Component\Translation\TranslatorInterface;
+use Symfony\Contracts\Translation\TranslatorInterface;
 
 class FooterType extends TranslatorAwareType
 {
@@ -56,23 +57,39 @@ class FooterType extends TranslatorAwareType
     protected $productPreviewUrlProvider;
 
     /**
+     * @var FeatureInterface
+     */
+    private $multistoreFeature;
+
+    /**
+     * @var int|null
+     */
+    private $contextShopId;
+
+    /**
      * @param TranslatorInterface $translator
      * @param array $locales
      * @param ProductProvider $productUrlProvider
      * @param ProductPreviewProvider $productPreviewUrlProvider
      * @param RouterInterface $router
+     * @param FeatureInterface $multistoreFeature
+     * @param int|null $contextShopId
      */
     public function __construct(
         TranslatorInterface $translator,
         array $locales,
         ProductProvider $productUrlProvider,
         ProductPreviewProvider $productPreviewUrlProvider,
-        RouterInterface $router
+        RouterInterface $router,
+        FeatureInterface $multistoreFeature,
+        ?int $contextShopId
     ) {
         parent::__construct($translator, $locales);
         $this->productUrlProvider = $productUrlProvider;
         $this->productPreviewUrlProvider = $productPreviewUrlProvider;
         $this->router = $router;
+        $this->contextShopId = $contextShopId;
+        $this->multistoreFeature = $multistoreFeature;
     }
 
     /**
@@ -85,8 +102,9 @@ class FooterType extends TranslatorAwareType
         $deleteUrl = $this->router->generate('admin_products_v2_delete', [
             'productId' => $productId,
         ]);
-        $duplicateUrl = $this->router->generate('admin_products_v2_duplicate', [
+        $duplicateUrl = $this->router->generate('admin_products_v2_duplicate_shop', [
             'productId' => $productId,
+            'shopId' => $this->contextShopId,
         ]);
         $editUrl = $this->router->generate('admin_products_v2_edit', [
             'productId' => $productId,
@@ -94,6 +112,11 @@ class FooterType extends TranslatorAwareType
         $productPreviewUrl = $this->productPreviewUrlProvider->getUrl($productId, $options['active']);
         // We use a placeholder {friendly-url} as the rewrite part so that it can be replaced dynamically by js
         $seoUrl = $this->productUrlProvider->getUrl($productId, '{friendly-url}');
+
+        $duplicateLabel = $this->trans('Duplicate', 'Admin.Actions');
+        if ($this->multistoreFeature->isActive()) {
+            $duplicateLabel = $this->trans('Duplicate for current store', 'Admin.Actions');
+        }
 
         $builder
             ->add('catalog', IconButtonType::class, [
@@ -106,12 +129,11 @@ class FooterType extends TranslatorAwareType
                 ],
             ])
             ->add('duplicate_product', IconButtonType::class, [
-                'label' => $this->trans('Duplicate', 'Admin.Actions'),
-                'type' => 'link',
+                'label' => $duplicateLabel,
                 'attr' => [
                     'class' => 'btn-outline-secondary duplicate-product-button',
                     'data-modal-title' => $this->trans('Duplicate product?', 'Admin.Catalog.Notification'),
-                    'data-modal-apply' => $this->trans('Duplicate', 'Admin.Actions'),
+                    'data-modal-apply' => $duplicateLabel,
                     'data-modal-cancel' => $this->trans('Cancel', 'Admin.Actions'),
                     'data-confirm-button-class' => 'btn-primary',
                     'data-button-url' => $duplicateUrl,
@@ -133,7 +155,7 @@ class FooterType extends TranslatorAwareType
                 'type' => 'link',
                 'attr' => [
                     'class' => 'btn-outline-secondary new-product-button',
-                    'href' => $this->router->generate('admin_products_v2_create'),
+                    'href' => $this->router->generate('admin_products_v2_create', ['shopId' => $this->contextShopId]),
                 ],
             ])
             ->add('cancel', IconButtonType::class, [

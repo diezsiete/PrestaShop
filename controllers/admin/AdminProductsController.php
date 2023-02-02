@@ -24,6 +24,8 @@
  * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
  */
 use PrestaShop\PrestaShop\Adapter\SymfonyContainer;
+use PrestaShop\PrestaShop\Core\FeatureFlag\FeatureFlagSettings;
+use PrestaShop\PrestaShop\Core\Image\ImageFormatConfiguration;
 
 /**
  * @property Product|null $object
@@ -580,6 +582,11 @@ class AdminProductsControllerCore extends AdminController
         }
     }
 
+    /**
+     * @return bool|ObjectModel|void|null
+     *
+     * @throws PrestaShopException
+     */
     public function processDelete()
     {
         $object = $this->loadObject();
@@ -655,6 +662,11 @@ class AdminProductsControllerCore extends AdminController
         }
     }
 
+    /**
+     * @return bool|void
+     *
+     * @throws PrestaShopException
+     */
     protected function processBulkDelete()
     {
         if ($this->access('delete')) {
@@ -686,7 +698,7 @@ class AdminProductsControllerCore extends AdminController
                              * - physical stock for this product
                              * - supply order(s) for this product
                              */
-                            if (Configuration::get('PS_ADVANCED_STOCK_MANAGEMENT') && $product->advanced_stock_management && isset($stock_manager)) {
+                            if (Configuration::get('PS_ADVANCED_STOCK_MANAGEMENT') && $product->advanced_stock_management && isset($stock_manager)) { // @phpstan-ignore-line
                                 $physical_quantity = $stock_manager->getProductPhysicalQuantities($product->id, 0);
                                 $real_quantity = $stock_manager->getProductRealQuantities($product->id, 0);
                                 if ($physical_quantity > 0 || $real_quantity > $physical_quantity) {
@@ -1113,6 +1125,10 @@ class AdminProductsControllerCore extends AdminController
 
     /**
      * Overrides parent for custom redirect link.
+     *
+     * @return bool|ObjectModel|void|null
+     *
+     * @throws PrestaShopException
      */
     public function processPosition()
     {
@@ -1777,7 +1793,7 @@ class AdminProductsControllerCore extends AdminController
                     $warehouse_location_entity->id_product = $this->object->id;
                     $warehouse_location_entity->id_product_attribute = 0;
                     $warehouse_location_entity->id_warehouse = (int) Configuration::get('PS_DEFAULT_WAREHOUSE_NEW_PRODUCT');
-                    $warehouse_location_entity->location = pSQL('');
+                    $warehouse_location_entity->location = '';
                     $warehouse_location_entity->save();
                 }
 
@@ -1881,7 +1897,10 @@ class AdminProductsControllerCore extends AdminController
                 $object->indexed = 0;
 
                 if (Shop::isFeatureActive() && Shop::getContext() != Shop::CONTEXT_SHOP) {
-                    $object->setFieldsToUpdate((array) Tools::getValue('multishop_check', []));
+                    $values = (array) Tools::getValue('multishop_check', []);
+                    $values['state'] = Product::STATE_SAVED;
+
+                    $object->setFieldsToUpdate($values);
                 }
 
                 // Duplicate combinations if not associated to shop
@@ -2484,7 +2503,7 @@ class AdminProductsControllerCore extends AdminController
                     if ($this->context->currency->id) {
                         $product_supplier->id_currency = (int) $this->context->currency->id;
                     } else {
-                        $product_supplier->id_currency = (int) Configuration::get('PS_CURRENCY_DEFAULT');
+                        $product_supplier->id_currency = Currency::getDefaultCurrencyId();
                     }
                     $product_supplier->save();
 
@@ -2858,6 +2877,9 @@ class AdminProductsControllerCore extends AdminController
                     $imagesTypes = ImageType::getImagesTypes('products');
                     $generate_hight_dpi_images = (bool) Configuration::get('PS_HIGHT_DPI');
 
+                    $sfContainer = SymfonyContainer::getInstance();
+                    $isMultipleImageFormatFeatureEnabled = $sfContainer->get('prestashop.core.admin.feature_flag.repository')->isEnabled(FeatureFlagSettings::FEATURE_FLAG_MULTIPLE_IMAGE_FORMAT);
+                    $imageFormatsList = $sfContainer->get(ImageFormatConfiguration::class)->getGenerationFormats();
                     foreach ($imagesTypes as $imageType) {
                         if (!ImageManager::resize($file['save_path'], $new_path . '-' . stripslashes($imageType['name']) . '.' . $image->image_format, $imageType['width'], $imageType['height'], $image->image_format)) {
                             $file['error'] = $this->trans('An error occurred while copying this image:', [], 'Admin.Notifications.Error') . ' ' . stripslashes($imageType['name']);
@@ -2870,6 +2892,16 @@ class AdminProductsControllerCore extends AdminController
                                 $file['error'] = $this->trans('An error occurred while copying this image:', [], 'Admin.Notifications.Error') . ' ' . stripslashes($imageType['name']);
 
                                 continue;
+                            }
+                        }
+
+                        if ($isMultipleImageFormatFeatureEnabled) {
+                            foreach ($imageFormatsList as $imageFormat) {
+                                ImageManager::resize($file['save_path'], $new_path . '-' . stripslashes($imageType['name']) . '.' . $imageFormat, $imageType['width'], $imageType['height'], $imageFormat);
+
+                                if ($generate_hight_dpi_images) {
+                                    ImageManager::resize($file['save_path'], $new_path . '-' . stripslashes($imageType['name']) . '2x.' . $imageFormat, (int) $imageType['width'] * 2, (int) $imageType['height'] * 2, $imageFormat);
+                                }
                             }
                         }
                     }

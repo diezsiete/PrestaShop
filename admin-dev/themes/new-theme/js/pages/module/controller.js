@@ -719,6 +719,7 @@ class AdminModuleController {
        */
       timeout: 0,
       addedfile: () => {
+        $(`${self.moduleImportSuccessSelector}, ${self.moduleImportFailureSelector}`).hide();
         self.animateStartUpload();
       },
       processing: () => {
@@ -904,6 +905,7 @@ class AdminModuleController {
       'bulk-disable-mobile': 'disableMobile',
       'bulk-enable-mobile': 'enableMobile',
       'bulk-reset': 'reset',
+      'bulk-delete': 'delete',
     };
 
     // Note no grid selector used yet since we do not needed it at dev time

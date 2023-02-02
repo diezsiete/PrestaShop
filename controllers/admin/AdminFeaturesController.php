@@ -115,9 +115,15 @@ class AdminFeaturesControllerCore extends AdminController
         $this->identifier = 'id_feature';
     }
 
+    /**
+     * @return false|string|void
+     *
+     * @throws PrestaShopDatabaseException
+     * @throws PrestaShopException
+     */
     public function renderView()
     {
-        if (($id = (int) Tools::getValue('id_feature'))) {
+        if ($id = (int) Tools::getValue('id_feature')) {
             $this->setTypeValue();
             $this->list_id = 'feature_value';
             $this->lang = true;
@@ -447,7 +453,7 @@ class AdminFeaturesControllerCore extends AdminController
         } else {
             $adminPerformanceUrl = $this->context->link->getAdminLink('AdminPerformance');
             $url = '<a href="' . $adminPerformanceUrl . '#featuresDetachables">' . $this->trans('Performance', [], 'Admin.Global') . '</a>';
-            $this->displayWarning($this->trans('This feature has been disabled. You can activate it here: %url%.', ['%url%' => $url], 'Admin.Catalog.Notification'));
+            $this->displayWarning($this->trans('This feature has been disabled. You can activate it here: %url%.', ['_raw' => true, '%url%' => $url], 'Admin.Catalog.Notification'));
         }
 
         $this->context->smarty->assign([

@@ -40,16 +40,27 @@ class ModuleManagementEvent extends Event
     public const DISABLE_MOBILE = 'module.disable.mobile';
     public const UPGRADE = 'module.upgrade';
     public const RESET = 'module.reset';
+    public const DELETE = 'module.delete';
 
+    /** @var ModuleInterface */
     private $module;
 
-    public function __construct(ModuleInterface $module)
+    /** @var bool */
+    private $systemClearCache;
+
+    public function __construct(ModuleInterface $module, bool $systemClearCache = true)
     {
         $this->module = $module;
+        $this->systemClearCache = $systemClearCache;
     }
 
-    public function getModule()
+    public function getModule(): ModuleInterface
     {
         return $this->module;
+    }
+
+    public function getSystemClearCache(): bool
+    {
+        return $this->systemClearCache;
     }
 }

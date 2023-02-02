@@ -494,7 +494,9 @@ class MailCore extends ObjectModel
             );
 
             /* Create mail and attach differents parts */
-            $subject = '[' . strip_tags($configuration['PS_SHOP_NAME']) . '] ' . $subject;
+            if (Configuration::get('PS_MAIL_SUBJECT_PREFIX')) {
+                $subject = '[' . strip_tags($configuration['PS_SHOP_NAME']) . '] ' . $subject;
+            }
             $message->setSubject($subject);
 
             $message->setCharset('utf-8');
@@ -510,7 +512,7 @@ class MailCore extends ObjectModel
                 $message->setReplyTo($replyTo, ($replyToName !== '' ? $replyToName : null));
             }
 
-            if (false !== Configuration::get('PS_LOGO_MAIL') &&
+            if (false !== Configuration::get('PS_LOGO_MAIL', null, null, $idShop) &&
                 file_exists(_PS_IMG_DIR_ . Configuration::get('PS_LOGO_MAIL', null, null, $idShop))
             ) {
                 $logo = _PS_IMG_DIR_ . Configuration::get('PS_LOGO_MAIL', null, null, $idShop);

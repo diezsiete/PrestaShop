@@ -77,6 +77,7 @@ class ModuleController extends ModuleAbstractController
             'bulk-reset' => $this->trans('Reset', 'Admin.Actions'),
             'bulk-enable-mobile' => $this->trans('Enable Mobile', 'Admin.Modules.Feature'),
             'bulk-disable-mobile' => $this->trans('Disable Mobile', 'Admin.Modules.Feature'),
+            'bulk-delete' => $this->trans('Delete', 'Admin.Modules.Feature'),
         ];
 
         return $this->render(
@@ -100,7 +101,7 @@ class ModuleController extends ModuleAbstractController
 
     /**
      * @AdminSecurity(
-     *     "is_granted('read', 'ADMINMODULESSF_') && is_granted('create', 'ADMINMODULESSF_') && is_granted('update', 'ADMINMODULESSF_') && is_granted('delete', 'ADMINMODULESSF_')"
+     *     "is_granted('read', 'ADMINMODULESSF_') || is_granted('create', 'ADMINMODULESSF_') || is_granted('update', 'ADMINMODULESSF_') || is_granted('delete', 'ADMINMODULESSF_')"
      * )
      *
      * @param Request $module_name
@@ -179,6 +180,9 @@ class ModuleController extends ModuleAbstractController
             case ModuleAdapter::ACTION_UNINSTALL:
                 $deniedAccess = $this->checkPermission(PageVoter::DELETE);
                 break;
+            case ModuleAdapter::ACTION_DELETE:
+                $deniedAccess = $this->checkPermission(PageVoter::DELETE);
+                break;
 
             default:
                 $deniedAccess = null;
@@ -209,9 +213,19 @@ class ModuleController extends ModuleAbstractController
 
         try {
             $args = [$module];
-            if ($action === 'uninstall') {
+            if ($action === ModuleAdapter::ACTION_UNINSTALL) {
                 $args[] = (bool) ($request->request->get('actionParams', [])['deletion'] ?? false);
                 $response[$module]['refresh_needed'] = $this->moduleNeedsReload($moduleRepository->getModule($module));
+            }
+            if ($action === ModuleAdapter::ACTION_DELETE) {
+                $response[$module]['refresh_needed'] = false;
+            }
+            $systemCacheClearEnabled = filter_var(
+                $request->request->get('actionParams', [])['cacheClearEnabled'] ?? true,
+                FILTER_VALIDATE_BOOLEAN
+            );
+            if (!$systemCacheClearEnabled) {
+                $moduleManager->disableSystemClearCache();
             }
             $response[$module]['status'] = call_user_func([$moduleManager, $action], ...$args);
         } catch (Exception $e) {
@@ -242,17 +256,21 @@ class ModuleController extends ModuleAbstractController
                     '%module%' => $module,
                 ]
             );
-            if ($action !== 'uninstall') {
+            if ($action !== 'uninstall' && $action !== 'delete') {
                 $response[$module]['module_name'] = $module;
                 $response[$module]['is_configurable'] = (bool) $moduleInstance->attributes->get('is_configurable');
             }
 
             $collection = ModuleCollection::createFrom([$moduleInstance]);
+            $collectionWithActionUrls = $modulesProvider->setActionUrls($collection);
+
+            $modulePresenter = $this->get('prestashop.adapter.presenter.module');
+            $collectionPresented = $modulePresenter->presentCollection($collectionWithActionUrls);
+
             $response[$module]['action_menu_html'] = $this->container->get('twig')->render(
                 '@PrestaShop/Admin/Module/Includes/action_menu.html.twig',
                 [
-                    'module' => $this->container->get('prestashop.adapter.presenter.module')
-                        ->presentCollection($modulesProvider->setActionUrls($collection))[0],
+                    'module' => $collectionPresented[0],
                     'level' => $this->authorizationLevel(self::CONTROLLER_NAME),
                 ]
             );

@@ -50,8 +50,6 @@ const BOEvent = {
 
 /**
  * Class is responsible for handling Module Card behavior
- *
- * This is a port of admin-dev/themes/default/js/bundle/module/module_card.js
  */
 export default class ModuleCard {
   moduleActionMenuLinkSelector: string;
@@ -71,6 +69,8 @@ export default class ModuleCard {
   moduleActionMenuResetLinkSelector: string;
 
   moduleActionMenuUpdateLinkSelector: string;
+
+  moduleActionMenuDeleteLinkSelector: string;
 
   moduleItemListSelector: string;
 
@@ -97,6 +97,7 @@ export default class ModuleCard {
     this.moduleActionMenuDisableMobileLinkSelector = 'button.module_action_menu_disableMobile';
     this.moduleActionMenuResetLinkSelector = 'button.module_action_menu_reset';
     this.moduleActionMenuUpdateLinkSelector = 'button.module_action_menu_upgrade';
+    this.moduleActionMenuDeleteLinkSelector = 'button.module_action_menu_delete';
     this.moduleItemListSelector = '.module-item-list';
     this.moduleItemGridSelector = '.module-item-grid';
     this.moduleItemActionsSelector = '.module-actions';
@@ -158,6 +159,18 @@ export default class ModuleCard {
           self.dispatchPreEvent('uninstall', this)
           && self.confirmAction('uninstall', this)
           && self.requestToController('uninstall', $(this))
+        );
+      },
+    );
+
+    $(document).on(
+      'click',
+      this.moduleActionMenuDeleteLinkSelector,
+      function () {
+        return (
+          self.dispatchPreEvent('delete', this)
+          && self.confirmAction('delete', this)
+          && self.requestToController('delete', $(this))
         );
       },
     );
@@ -360,7 +373,7 @@ export default class ModuleCard {
     callback = () => true,
   ): boolean {
     const self = this;
-    const jqElementObj = element.closest(this.moduleItemActionsSelector);
+    let jqElementObj = element.closest(this.moduleItemActionsSelector);
     const form = element.closest('form');
     const spinnerObj = $(
       '<button class="btn-primary-reverse onclick unbind spinner "></button>',
@@ -450,7 +463,11 @@ export default class ModuleCard {
           BOEvent.emitEvent('Module Installed', 'CustomEvent', mainElement);
         };
 
-        jqElementObj.replaceWith(result[moduleTechName].action_menu_html);
+        // Since we replace the DOM content
+        // we need to update the jquery object reference to target the new content,
+        // and we need to hide the new content which is not hidden by default
+        jqElementObj = $(result[moduleTechName].action_menu_html).replaceAll(jqElementObj);
+        jqElementObj.hide();
       })
       .fail(() => {
         const moduleItem = jqElementObj.closest('module-item-list');

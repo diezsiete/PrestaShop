@@ -26,6 +26,9 @@
 
 namespace PrestaShop\PrestaShop\Core\Module;
 
+/**
+ * @method delete(string $name) will be added in 9.0
+ */
 interface ModuleManagerInterface
 {
     /**
@@ -38,7 +41,7 @@ interface ModuleManagerInterface
 
     public function uninstall(string $name, bool $deleteFiles = false): bool;
 
-    public function upgrade(string $name): bool;
+    public function upgrade(string $name, $source = null): bool;
 
     public function enable(string $name): bool;
 

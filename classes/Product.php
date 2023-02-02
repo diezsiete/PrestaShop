@@ -26,6 +26,7 @@
 
 use PrestaShop\Decimal\DecimalNumber;
 use PrestaShop\PrestaShop\Adapter\ServiceLocator;
+use PrestaShop\PrestaShop\Core\Domain\Product\Pack\ValueObject\PackStockType;
 use PrestaShop\PrestaShop\Core\Domain\Product\ProductSettings;
 use PrestaShop\PrestaShop\Core\Domain\Product\Stock\ValueObject\OutOfStockType;
 use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\Ean13;
@@ -38,13 +39,6 @@ use PrestaShop\PrestaShop\Core\Util\DateTime\DateTime as DateTimeUtil;
 
 class ProductCore extends ObjectModel
 {
-    /**
-     * @var string Tax name
-     *
-     * @deprecated Since 1.4
-     */
-    public $tax_name;
-
     /** @var float Tax rate */
     public $tax_rate;
 
@@ -74,14 +68,6 @@ class ProductCore extends ObjectModel
 
     /** @var string|array Short description or array of short description by id_lang */
     public $description_short;
-
-    /**
-     * @deprecated since 1.7.8
-     * @see StockAvailable::$quantity instead
-     *
-     * @var int Quantity available
-     */
-    public $quantity = 0;
 
     /** @var int Minimal quantity for add to cart */
     public $minimal_quantity = 1;
@@ -211,7 +197,7 @@ class ProductCore extends ObjectModel
      *
      * @see RedirectType
      */
-    public $redirect_type = RedirectType::TYPE_NOT_FOUND;
+    public $redirect_type = RedirectType::TYPE_DEFAULT;
 
     /**
      * @var int Product identifier or Category identifier depends on redirect_type
@@ -252,24 +238,9 @@ class ProductCore extends ObjectModel
     public $state = self::STATE_SAVED;
 
     /**
-     * @var float Base price of the product
-     *
-     * @deprecated 1.6.0.13
-     */
-    public $base_price;
-
-    /**
      * @var int|null TaxRulesGroup identifier
      */
     public $id_tax_rules_group;
-
-    /**
-     * @var int
-     *          We keep this variable for retrocompatibility for themes
-     *
-     * @deprecated 1.5.0
-     */
-    public $id_color_default = 0;
 
     /**
      * @deprecated since 1.7.8
@@ -289,14 +260,6 @@ class ProductCore extends ObjectModel
      *          - 2 Use global setting
      */
     public $out_of_stock = OutOfStockType::OUT_OF_STOCK_DEFAULT;
-
-    /**
-     * @deprecated since 1.7.8
-     * This property was only relevant to advanced stock management and that feature is not maintained anymore
-     *
-     * @var bool|null
-     */
-    public $depends_on_stock;
 
     /**
      * @var bool
@@ -336,7 +299,7 @@ class ProductCore extends ObjectModel
     /**
      * @var int tell the type of stock management to apply on the pack
      */
-    public $pack_stock_type = Pack::STOCK_TYPE_DEFAULT;
+    public $pack_stock_type = PackStockType::STOCK_TYPE_DEFAULT;
 
     /**
      * Type of delivery time.
@@ -401,20 +364,6 @@ class ProductCore extends ObjectModel
      */
     protected static $_combination_associations = [];
 
-    /**
-     * @deprecated Since 1.5.6.1
-     *
-     * @var array
-     */
-    protected static $_cart_quantity = [];
-
-    /**
-     * @deprecated Since 1.5.0.9
-     *
-     * @var array
-     */
-    protected static $_tax_rules_group = [];
-
     /** @var array */
     protected static $_cacheFeatures = [];
 
@@ -424,12 +373,8 @@ class ProductCore extends ObjectModel
     /** @var array */
     protected static $productPropertiesCache = [];
 
-    /**
-     * @deprecated Since 1.5.0.1 Unused
-     *
-     * @var array cache stock data in getStock() method
-     */
-    protected static $cacheStock = [];
+    /** @var int|null */
+    protected static $psEcotaxTaxRulesGroupId = null;
 
     /**
      * Product can be temporary saved in database
@@ -552,8 +497,8 @@ class ProductCore extends ObjectModel
             'name' => ['type' => self::TYPE_STRING, 'lang' => true, 'validate' => 'isCatalogName', 'required' => false, 'size' => ProductSettings::MAX_NAME_LENGTH],
             'description' => ['type' => self::TYPE_HTML, 'lang' => true, 'validate' => 'isCleanHtml'],
             'description_short' => ['type' => self::TYPE_HTML, 'lang' => true, 'validate' => 'isCleanHtml'],
-            'available_now' => ['type' => self::TYPE_STRING, 'lang' => true, 'validate' => 'isGenericName', 'size' => 255],
-            'available_later' => ['type' => self::TYPE_STRING, 'lang' => true, 'validate' => 'IsGenericName', 'size' => 255],
+            'available_now' => ['type' => self::TYPE_STRING, 'lang' => true, 'validate' => 'isGenericName', 'size' => ProductSettings::MAX_AVAILABLE_NOW_LABEL_LENGTH],
+            'available_later' => ['type' => self::TYPE_STRING, 'lang' => true, 'validate' => 'IsGenericName', 'size' => ProductSettings::MAX_AVAILABLE_LATER_LABEL_LENGTH],
         ],
         'associations' => [
             'manufacturer' => ['type' => self::HAS_ONE],
@@ -721,7 +666,6 @@ class ProductCore extends ObjectModel
             }
 
             $this->isFullyLoaded = $full;
-            $this->tax_name = 'deprecated'; // The applicable tax may be BOTH the product one AND the state one (moreover this variable is some deadcode)
             $this->manufacturer_name = Manufacturer::getNameById((int) $this->id_manufacturer);
             $this->supplier_name = Supplier::getNameById((int) $this->id_supplier);
             $address = null;
@@ -1232,6 +1176,7 @@ class ProductCore extends ObjectModel
         static::$_pricesLevel2 = [];
         static::$_incat = [];
         static::$_combinations = [];
+        static::$psEcotaxTaxRulesGroupId = null;
         Cache::clean('Product::*');
     }
 
@@ -1301,17 +1246,28 @@ class ProductCore extends ObjectModel
         $result = parent::delete();
 
         // Removes the product from StockAvailable, for the current shop
-        StockAvailable::removeProductFromStockAvailable($this->id);
-        $result &= ($this->deleteProductAttributes() && $this->deleteImages());
+        $id_shop_list = count($this->id_shop_list) ? $this->id_shop_list : Shop::getContextListShopID();
+        if (!empty($id_shop_list)) {
+            foreach ($id_shop_list as $shopId) {
+                StockAvailable::removeProductFromStockAvailable($this->id, null, $shopId);
+            }
+        } else {
+            StockAvailable::removeProductFromStockAvailable($this->id);
+        }
+
         // If there are still entries in product_shop, don't remove completely the product
         if ($this->hasMultishopEntries()) {
+            $this->updateDefaultShop();
+
             return true;
         }
 
         Hook::exec('actionProductDelete', ['id_product' => (int) $this->id, 'product' => $this]);
         if (!$result ||
+            !$this->deleteProductAttributes() ||
+            !$this->deleteImages() ||
             !GroupReduction::deleteProductReduction($this->id) ||
-            !$this->deleteCategories(true) ||
+            !$this->deleteCategories(false) ||
             !$this->deleteProductFeatures() ||
             !$this->deleteTags() ||
             !$this->deleteCartProducts() ||
@@ -1758,90 +1714,6 @@ class ProductCore extends ObjectModel
     }
 
     /**
-     * addProductAttribute is deprecated.
-     *
-     * The quantity params now set StockAvailable for the current shop with the specified quantity
-     * The supplier_reference params now set the supplier reference of the default supplier of the product if possible
-     *
-     * @deprecated since 1.5.0
-     * @see StockManager if you want to manage real stock
-     * @see StockAvailable if you want to manage available quantities for sale on your shop(s)
-     * @see ProductSupplier for manage supplier reference(s)
-     *
-     * @param float $price Additional price
-     * @param float $weight Additional weight
-     * @param float $unit_impact
-     * @param float $ecotax Additional ecotax
-     * @param int $quantity
-     * @param int[] $id_images Image ids
-     * @param string $reference Reference
-     * @param int $id_supplier Supplier identifier
-     * @param string $ean13
-     * @param bool $default Is default attribute for product
-     * @param string $location
-     * @param string $upc
-     * @param int $minimal_quantity
-     * @param string $isbn
-     * @param int|null $low_stock_threshold Low stock for mail alert
-     * @param bool $low_stock_alert Low stock mail alert activated
-     * @param string|null $mpn
-     *
-     * @return int|false Attribute identifier if success, false if it fail
-     */
-    public function addProductAttribute(
-        $price,
-        $weight,
-        $unit_impact,
-        $ecotax,
-        $quantity,
-        $id_images,
-        $reference,
-        $id_supplier,
-        $ean13,
-        $default,
-        $location,
-        $upc,
-        $minimal_quantity,
-        $isbn,
-        $low_stock_threshold = null,
-        $low_stock_alert = false,
-        $mpn = null
-    ) {
-        Tools::displayAsDeprecated();
-
-        $id_product_attribute = $this->addAttribute(
-            $price,
-            $weight,
-            $unit_impact,
-            $ecotax,
-            $id_images,
-            $reference,
-            $ean13,
-            $default,
-            $location,
-            $upc,
-            $minimal_quantity,
-            [],
-            null,
-            0,
-            $isbn,
-            $low_stock_threshold,
-            $low_stock_alert,
-            $mpn
-        );
-
-        if (!$id_product_attribute) {
-            return false;
-        }
-
-        StockAvailable::setQuantity($this->id, $id_product_attribute, $quantity);
-        //Try to set the default supplier reference
-        $this->addSupplierReference($id_supplier, $id_product_attribute);
-
-        return $id_product_attribute;
-    }
-
-    /**
      * @param array $combinations
      * @param array $attributes
      * @param bool $resetExistingCombination
@@ -1862,6 +1734,8 @@ class ProductCore extends ObjectModel
             if ($id_combination) {
                 $obj->minimal_quantity = 1;
                 $obj->available_date = '0000-00-00';
+                $obj->available_now = '';
+                $obj->available_later = '';
             }
 
             foreach ($combination as $field => $value) {
@@ -1928,6 +1802,8 @@ class ProductCore extends ObjectModel
      * @param int|null $low_stock_threshold Low stock for mail alert
      * @param bool $low_stock_alert Low stock mail alert activated
      * @param string|null $mpn
+     * @param string[]|string $available_now Combination available now labels
+     * @param string[]|string $available_later Combination available later labels
      *
      * @return int|false Attribute identifier if success, false if it fail
      */
@@ -1951,7 +1827,9 @@ class ProductCore extends ObjectModel
         $isbn = '',
         $low_stock_threshold = null,
         $low_stock_alert = false,
-        $mpn = null
+        $mpn = null,
+        $available_now = [],
+        $available_later = []
     ) {
         $id_product_attribute = $this->addAttribute(
             $price,
@@ -1971,7 +1849,9 @@ class ProductCore extends ObjectModel
             $isbn,
             $low_stock_threshold,
             $low_stock_alert,
-            $mpn
+            $mpn,
+            $available_now,
+            $available_later
         );
         $this->addSupplierReference($id_supplier, $id_product_attribute);
         $result = ObjectModel::updateMultishopTable('Combination', [
@@ -2053,85 +1933,6 @@ class ProductCore extends ObjectModel
     }
 
     /**
-     * Update a product attribute.
-     *
-     * @deprecated since 1.5
-     * @see updateAttribute() to use instead
-     * @see ProductSupplier for manage supplier reference(s)
-     *
-     * @param int $id_product_attribute Attribute identifier
-     * @param float $wholesale_price
-     * @param float $price Additional price
-     * @param float $weight Additional weight
-     * @param float $unit
-     * @param float $ecotax Additional ecotax
-     * @param int[] $id_images Image ids
-     * @param string $reference
-     * @param int $id_supplier Supplier identifier
-     * @param string $ean13
-     * @param bool $default Is default attribute for product
-     * @param string $location
-     * @param string $upc
-     * @param int $minimal_quantity
-     * @param string $available_date Date in mysql format Y-m-d
-     * @param string $isbn
-     * @param int|null $low_stock_threshold Low stock for mail alert
-     * @param bool $low_stock_alert Low stock mail alert activated
-     * @param string|null $mpn
-     *
-     * @return bool
-     */
-    public function updateProductAttribute(
-        $id_product_attribute,
-        $wholesale_price,
-        $price,
-        $weight,
-        $unit,
-        $ecotax,
-        $id_images,
-        $reference,
-        $id_supplier,
-        $ean13,
-        $default,
-        $location,
-        $upc,
-        $minimal_quantity,
-        $available_date,
-        $isbn = '',
-        $low_stock_threshold = null,
-        $low_stock_alert = false,
-        $mpn = null
-    ) {
-        Tools::displayAsDeprecated('Use updateAttribute() instead');
-
-        $return = $this->updateAttribute(
-            $id_product_attribute,
-            $wholesale_price,
-            $price,
-            $weight,
-            $unit,
-            $ecotax,
-            $id_images,
-            $reference,
-            $ean13,
-            $default,
-            $location = null,
-            $upc = null,
-            $minimal_quantity,
-            $available_date,
-            true,
-            [],
-            $isbn,
-            $low_stock_threshold,
-            $low_stock_alert,
-            $mpn = null
-        );
-        $this->addSupplierReference($id_supplier, $id_product_attribute);
-
-        return $return;
-    }
-
-    /**
      * Sets or updates Supplier Reference.
      *
      * @param int $id_supplier Supplier identifier
@@ -2189,6 +1990,8 @@ class ProductCore extends ObjectModel
      * @param int|null $low_stock_threshold Low stock for mail alert
      * @param bool $low_stock_alert Low stock mail alert activated
      * @param string $mpn MPN
+     * @param string[]|string|null $available_now Combination available now labels
+     * @param string[]|string|null $available_later Combination available later labels
      *
      * @return bool Update result
      */
@@ -2212,12 +2015,14 @@ class ProductCore extends ObjectModel
         $isbn = '',
         $low_stock_threshold = null,
         $low_stock_alert = false,
-        $mpn = null
+        $mpn = null,
+        $available_now = null,
+        $available_later = null
     ) {
         $combination = new Combination($id_product_attribute);
 
         if (!$update_all_fields) {
-            $combination->setFieldsToUpdate([
+            $fieldsToUpdate = [
                 'price' => null !== $price,
                 'wholesale_price' => null !== $wholesale_price,
                 'ecotax' => null !== $ecotax,
@@ -2225,8 +2030,32 @@ class ProductCore extends ObjectModel
                 'unit_price_impact' => null !== $unit,
                 'default_on' => null !== $default,
                 'minimal_quantity' => null !== $minimal_quantity,
+                'reference' => null !== $reference,
+                'ean13' => null !== $ean13,
+                'upc' => null !== $upc,
+                'isbn' => null !== $isbn,
+                'mpn' => null !== $mpn,
                 'available_date' => null !== $available_date,
-            ]);
+                'low_stock_threshold' => null !== $low_stock_threshold,
+                'low_stock_alert' => null !== $low_stock_alert,
+                'id_shop_list' => !empty($id_shop_list),
+                'available_now' => is_string($available_now),
+                'available_later' => is_string($available_later),
+            ];
+            // Labels can be passed into this function both as array and string, as does the object model itself.
+            // If these values are passed as strings, they will be updated in all languages of the object.
+            if (is_array($available_now)) {
+                foreach ($available_now as $id_lang => $value) {
+                    $fieldsToUpdate['available_now'][$id_lang] = true;
+                }
+            }
+            if (is_array($available_later)) {
+                foreach ($available_later as $id_lang => $value) {
+                    $fieldsToUpdate['available_later'][$id_lang] = true;
+                }
+            }
+
+            $combination->setFieldsToUpdate($fieldsToUpdate);
         }
 
         $price = (float) str_replace(',', '.', (string) $price);
@@ -2247,8 +2076,10 @@ class ProductCore extends ObjectModel
         $combination->low_stock_threshold = empty($low_stock_threshold) && '0' != $low_stock_threshold ? null : (int) $low_stock_threshold;
         $combination->low_stock_alert = !empty($low_stock_alert);
         $combination->available_date = $available_date ? pSQL($available_date) : '0000-00-00';
+        $combination->available_now = $available_now;
+        $combination->available_later = $available_later;
 
-        if (count($id_shop_list)) {
+        if (!empty($id_shop_list)) {
             $combination->id_shop_list = $id_shop_list;
         }
 
@@ -2303,6 +2134,8 @@ class ProductCore extends ObjectModel
      * @param int|null $low_stock_threshold Low stock for mail alert
      * @param bool $low_stock_alert Low stock mail alert activated
      * @param string|null $mpn
+     * @param string[]|string $available_now Combination available now labels
+     * @param string[]|string $available_later Combination available later labels
      *
      * @return int|false|void Attribute identifier if success, false if failed to add Combination, void if Product identifier not set
      */
@@ -2324,7 +2157,9 @@ class ProductCore extends ObjectModel
         $isbn = '',
         $low_stock_threshold = null,
         $low_stock_alert = false,
-        $mpn = null
+        $mpn = null,
+        $available_now = [],
+        $available_later = []
     ) {
         if (!$this->id) {
             return;
@@ -2349,6 +2184,8 @@ class ProductCore extends ObjectModel
         $combination->low_stock_threshold = empty($low_stock_threshold) && '0' != $low_stock_threshold ? null : (int) $low_stock_threshold;
         $combination->low_stock_alert = !empty($low_stock_alert);
         $combination->available_date = $available_date;
+        $combination->available_now = $available_now;
+        $combination->available_later = $available_later;
 
         if (count($id_shop_list)) {
             $combination->id_shop_list = array_unique($id_shop_list);
@@ -2397,26 +2234,6 @@ class ProductCore extends ObjectModel
         }
 
         return (int) $combination->id;
-    }
-
-    /**
-     * @deprecated since 1.5.0
-     *
-     * @return bool
-     */
-    public function updateQuantityProductWithAttributeQuantity()
-    {
-        Tools::displayAsDeprecated();
-
-        return Db::getInstance()->execute('
-        UPDATE `' . _DB_PREFIX_ . 'product`
-        SET `quantity` = IFNULL(
-        (
-            SELECT SUM(`quantity`)
-            FROM `' . _DB_PREFIX_ . 'product_attribute`
-            WHERE `id_product` = ' . (int) $this->id . '
-        ), \'0\')
-        WHERE `id_product` = ' . (int) $this->id);
     }
 
     /**
@@ -2656,10 +2473,9 @@ class ProductCore extends ObjectModel
             return false;
         }
 
-        $product_attributes = [];
-        foreach ($combinations as $combination) {
-            $product_attributes[] = (int) $combination['id_product_attribute'];
-        }
+        $combinations = array_column($combinations, null, 'id_product_attribute');
+
+        $combinationIds = array_keys($combinations);
 
         $lang = Db::getInstance()->executeS('SELECT pac.id_product_attribute, GROUP_CONCAT(agl.`name`, \'' . pSQL($attribute_value_separator) . '\',al.`name` ORDER BY agl.`id_attribute_group` SEPARATOR \'' . pSQL($attribute_separator) . '\') as attribute_designation
                 FROM `' . _DB_PREFIX_ . 'product_attribute_combination` pac
@@ -2667,12 +2483,12 @@ class ProductCore extends ObjectModel
                 LEFT JOIN `' . _DB_PREFIX_ . 'attribute_group` ag ON ag.`id_attribute_group` = a.`id_attribute_group`
                 LEFT JOIN `' . _DB_PREFIX_ . 'attribute_lang` al ON (a.`id_attribute` = al.`id_attribute` AND al.`id_lang` = ' . (int) $id_lang . ')
                 LEFT JOIN `' . _DB_PREFIX_ . 'attribute_group_lang` agl ON (ag.`id_attribute_group` = agl.`id_attribute_group` AND agl.`id_lang` = ' . (int) $id_lang . ')
-                WHERE pac.id_product_attribute IN (' . implode(',', $product_attributes) . ')
+                WHERE pac.id_product_attribute IN (' . implode(',', $combinationIds) . ')
                 GROUP BY pac.id_product_attribute
                 ORDER BY pac.id_product_attribute');
 
-        foreach ($lang as $k => $row) {
-            $combinations[$k]['attribute_designation'] = $row['attribute_designation'];
+        foreach ($lang as $row) {
+            $combinations[$row['id_product_attribute']]['attribute_designation'] = $row['attribute_designation'];
         }
 
         $computingPrecision = Context::getContext()->getComputingPrecision();
@@ -3599,7 +3415,7 @@ class ProductCore extends ObjectModel
             }
         }
 
-        $id_currency = Validate::isLoadedObject($context->currency) ? (int) $context->currency->id : (int) Configuration::get('PS_CURRENCY_DEFAULT');
+        $id_currency = Validate::isLoadedObject($context->currency) ? (int) $context->currency->id : Currency::getDefaultCurrencyId();
 
         if (!$id_address && Validate::isLoadedObject($cur_cart)) {
             $id_address = $cur_cart->{Configuration::get('PS_TAX_ADDRESS_TYPE')};
@@ -3854,14 +3670,13 @@ class ProductCore extends ObjectModel
                 $ecotax = Tools::convertPrice($ecotax, $id_currency);
             }
             if ($use_tax) {
-                static $psEcotaxTaxRulesGroupId = null;
-                if ($psEcotaxTaxRulesGroupId === null) {
-                    $psEcotaxTaxRulesGroupId = (int) Configuration::get('PS_ECOTAX_TAX_RULES_GROUP_ID');
+                if (self::$psEcotaxTaxRulesGroupId === null) {
+                    self::$psEcotaxTaxRulesGroupId = (int) Configuration::get('PS_ECOTAX_TAX_RULES_GROUP_ID');
                 }
                 // reinit the tax manager for ecotax handling
                 $tax_manager = TaxManagerFactory::getManager(
                     $address,
-                    $psEcotaxTaxRulesGroupId
+                    self::$psEcotaxTaxRulesGroupId
                 );
                 $ecotax_tax_calculator = $tax_manager->getTaxCalculator();
                 $price += $ecotax_tax_calculator->addTaxes($ecotax);
@@ -3911,6 +3726,33 @@ class ProductCore extends ObjectModel
             $price -= $group_reduction;
         }
 
+        Hook::exec('actionProductPriceCalculation', [
+            'id_shop' => $id_shop,
+            'id_product' => $id_product,
+            'id_product_attribute' => $id_product_attribute,
+            'id_customization' => $id_customization,
+            'id_country' => $id_country,
+            'id_state' => $id_state,
+            'zip_code' => $zipcode,
+            'id_currency' => $id_currency,
+            'id_group' => $id_group,
+            'id_cart' => $id_cart,
+            'id_customer' => $id_customer,
+            'use_customer_price' => $use_customer_price,
+            'quantity' => $quantity,
+            'real_quantity' => $real_quantity,
+            'use_tax' => $use_tax,
+            'decimals' => $decimals,
+            'only_reduc' => $only_reduc,
+            'use_reduc' => $use_reduc,
+            'with_ecotax' => $with_ecotax,
+            'specific_price' => &$specific_price,
+            'use_group_reduction' => $use_group_reduction,
+            'address' => $address,
+            'context' => $context,
+            'specific_price_reduction' => &$specific_price_reduction,
+            'price' => &$price,
+        ]);
         if ($only_reduc) {
             return Tools::ps_round($specific_price_reduction, $decimals);
         }
@@ -4440,10 +4282,15 @@ class ProductCore extends ObjectModel
                     a.`id_attribute`, al.`name` AS attribute_name, a.`color` AS attribute_color, product_attribute_shop.`id_product_attribute`,
                     IFNULL(stock.quantity, 0) as quantity, product_attribute_shop.`price`, product_attribute_shop.`ecotax`, product_attribute_shop.`weight`,
                     product_attribute_shop.`default_on`, pa.`reference`, pa.`ean13`, pa.`mpn`, pa.`upc`, pa.`isbn`, product_attribute_shop.`unit_price_impact`,
-                    product_attribute_shop.`minimal_quantity`, product_attribute_shop.`available_date`, ag.`group_type`
+                    product_attribute_shop.`minimal_quantity`, product_attribute_shop.`available_date`, ag.`group_type`,
+                    pal.`available_now`, pal.`available_later`
                 FROM `' . _DB_PREFIX_ . 'product_attribute` pa
                 ' . Shop::addSqlAssociation('product_attribute', 'pa') . '
                 ' . Product::sqlStock('pa', 'pa') . '
+                LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_lang` pal
+                    ON (
+                        pa.`id_product_attribute` = pal.`id_product_attribute` AND
+                        pal.`id_lang` = ' . (int) Context::getContext()->language->id . ')
                 LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_combination` pac ON (pac.`id_product_attribute` = pa.`id_product_attribute`)
                 LEFT JOIN `' . _DB_PREFIX_ . 'attribute` a ON (a.`id_attribute` = pac.`id_attribute`)
                 LEFT JOIN `' . _DB_PREFIX_ . 'attribute_group` ag ON (ag.`id_attribute_group` = a.`id_attribute_group`)
@@ -5504,7 +5351,7 @@ class ProductCore extends ObjectModel
         $row['category'] = Category::getLinkRewrite((int) $row['id_category_default'], (int) $id_lang);
         $row['category_name'] = Db::getInstance()->getValue('SELECT name FROM ' . _DB_PREFIX_ . 'category_lang WHERE id_shop = ' . (int) $context->shop->id . ' AND id_lang = ' . (int) $id_lang . ' AND id_category = ' . (int) $row['id_category_default']);
         $row['link'] = $context->link->getProductLink((int) $row['id_product'], $row['link_rewrite'], $row['category'], $row['ean13']);
-        $row['manufacturer_name'] = (int) $row['id_manufacturer'] > 0 ? Manufacturer::getNameById((int) $row['id_manufacturer']) : null;
+        $row['manufacturer_name'] = !empty((int) $row['id_manufacturer']) ? Manufacturer::getNameById((int) $row['id_manufacturer']) : null;
 
         $row['attribute_price'] = 0;
         if ($id_product_attribute) {
@@ -5735,7 +5582,7 @@ class ProductCore extends ObjectModel
         }
 
         // Finally, we apply the currency rate
-        $defaultCurrencyId = (int) Configuration::get('PS_CURRENCY_DEFAULT');
+        $defaultCurrencyId = Currency::getDefaultCurrencyId();
         $currencyId = Validate::isLoadedObject($context->currency) ? (int) $context->currency->id : $defaultCurrencyId;
         if ($currencyId !== $defaultCurrencyId) {
             $baseUnitPrice = Tools::convertPrice($baseUnitPrice, $currencyId);
@@ -5833,7 +5680,7 @@ class ProductCore extends ObjectModel
         if (!array_key_exists($id_product . '-' . $id_lang, self::$_frontFeaturesCache)) {
             self::$_frontFeaturesCache[$id_product . '-' . $id_lang] = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS(
                 '
-                SELECT name, value, pf.id_feature, f.position
+                SELECT name, value, pf.id_feature, f.position, fvl.id_feature_value
                 FROM ' . _DB_PREFIX_ . 'feature_product pf
                 LEFT JOIN ' . _DB_PREFIX_ . 'feature_lang fl ON (fl.id_feature = pf.id_feature AND fl.id_lang = ' . (int) $id_lang . ')
                 LEFT JOIN ' . _DB_PREFIX_ . 'feature_value_lang fvl ON (fvl.id_feature_value = pf.id_feature_value AND fvl.id_lang = ' . (int) $id_lang . ')
@@ -6542,6 +6389,7 @@ class ProductCore extends ObjectModel
      */
     public static function checkAccessStatic($id_product, $id_customer)
     {
+        // If group feature is disabled in performance configuration, we don't check anything and allow access
         if (!Group::isFeatureActive()) {
             return true;
         }
@@ -6569,81 +6417,6 @@ class ProductCore extends ObjectModel
         }
 
         return Cache::retrieve($cache_id);
-    }
-
-    /**
-     * Add a stock movement for current product.
-     *
-     * Since 1.5, this method only permit to add/remove available quantities of the current product in the current shop
-     *
-     * @see StockManager if you want to manage real stock
-     * @see StockAvailable if you want to manage available quantities for sale on your shop(s)
-     * @deprecated since 1.5.0
-     *
-     * @param int $quantity
-     * @param int $id_reason StockMvtReason identifier - useless
-     * @param int|null $id_product_attribute Attribute identifier
-     * @param int|null $id_order Order identifier - DEPRECATED
-     * @param int|null $id_employee Employee identifier - DEPRECATED
-     *
-     * @return bool
-     */
-    public function addStockMvt($quantity, $id_reason, $id_product_attribute = null, $id_order = null, $id_employee = null)
-    {
-        if (!$this->id || !$id_reason) {
-            return false;
-        }
-
-        if ($id_product_attribute == null) {
-            $id_product_attribute = 0;
-        }
-
-        $reason = new StockMvtReason((int) $id_reason);
-        if (!Validate::isLoadedObject($reason)) {
-            return false;
-        }
-
-        $quantity = abs((int) $quantity) * $reason->sign;
-
-        return StockAvailable::updateQuantity($this->id, $id_product_attribute, $quantity);
-    }
-
-    /**
-     * @deprecated since 1.5.0
-     *
-     * @param int $id_lang Language identifier
-     *
-     * @return array
-     */
-    public function getStockMvts($id_lang)
-    {
-        Tools::displayAsDeprecated();
-
-        return Db::getInstance()->executeS('
-            SELECT sm.id_stock_mvt, sm.date_add, sm.quantity, sm.id_order,
-            CONCAT(pl.name, \' \', GROUP_CONCAT(IFNULL(al.name, \'\'), \'\')) product_name, CONCAT(e.lastname, \' \', e.firstname) employee, mrl.name reason
-            FROM `' . _DB_PREFIX_ . 'stock_mvt` sm
-            LEFT JOIN `' . _DB_PREFIX_ . 'product_lang` pl ON (
-                sm.id_product = pl.id_product
-                AND pl.id_lang = ' . (int) $id_lang . Shop::addSqlRestrictionOnLang('pl') . '
-            )
-            LEFT JOIN `' . _DB_PREFIX_ . 'stock_mvt_reason_lang` mrl ON (
-                sm.id_stock_mvt_reason = mrl.id_stock_mvt_reason
-                AND mrl.id_lang = ' . (int) $id_lang . '
-            )
-            LEFT JOIN `' . _DB_PREFIX_ . 'employee` e ON (
-                e.id_employee = sm.id_employee
-            )
-            LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_combination` pac ON (
-                pac.id_product_attribute = sm.id_product_attribute
-            )
-            LEFT JOIN `' . _DB_PREFIX_ . 'attribute_lang` al ON (
-                al.id_attribute = pac.id_attribute
-                AND al.id_lang = ' . (int) $id_lang . '
-            )
-            WHERE sm.id_product=' . (int) $this->id . '
-            GROUP BY sm.id_stock_mvt
-        ');
     }
 
     /**
@@ -7323,7 +7096,9 @@ class ProductCore extends ObjectModel
 
         if (!Cache::isStored($cache_id)) {
             $result = Db::getInstance()->executeS('
-            SELECT a.`id_attribute`, a.`id_attribute_group`, al.`name`, agl.`name` as `group`, pa.`reference`, pa.`ean13`, pa.`isbn`, pa.`upc`, pa.`mpn`
+            SELECT a.`id_attribute`, a.`id_attribute_group`, al.`name`, agl.`name` as `group`,
+            pa.`reference`, pa.`ean13`, pa.`isbn`, pa.`upc`, pa.`mpn`,
+            pal.`available_now`, pal.`available_later`
             FROM `' . _DB_PREFIX_ . 'attribute` a
             LEFT JOIN `' . _DB_PREFIX_ . 'attribute_lang` al
                 ON (al.`id_attribute` = a.`id_attribute` AND al.`id_lang` = ' . (int) $id_lang . ')
@@ -7332,6 +7107,8 @@ class ProductCore extends ObjectModel
             LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute` pa
                 ON (pa.`id_product_attribute` = pac.`id_product_attribute`)
             ' . Shop::addSqlAssociation('product_attribute', 'pa') . '
+            LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute_lang` pal
+                ON (pal.`id_product_attribute` = pac.`id_product_attribute` AND pal.`id_lang` = ' . (int) $id_lang . ')
             LEFT JOIN `' . _DB_PREFIX_ . 'attribute_group_lang` agl
                 ON (a.`id_attribute_group` = agl.`id_attribute_group` AND agl.`id_lang` = ' . (int) $id_lang . ')
             WHERE pa.`id_product` = ' . (int) $id_product . '
@@ -7378,7 +7155,7 @@ class ProductCore extends ObjectModel
         if (null === $this->id || 0 >= $this->id) {
             return false;
         }
-        $attributes = self::getAttributesInformationsByProduct($this->id);
+        $attributes = self::getProductAttributesIds($this->id, true);
 
         return !empty($attributes);
     }
@@ -7453,7 +7230,7 @@ class ProductCore extends ObjectModel
         }
 
         if (empty($idProductAttribute)) {
-            throw new PrestaShopObjectNotFoundException('Can not retrieve the id_product_attribute');
+            throw new PrestaShopObjectNotFoundException('Cannot retrieve the id_product_attribute');
         }
 
         return (int) $idProductAttribute;
@@ -7474,7 +7251,7 @@ class ProductCore extends ObjectModel
         $sep = Configuration::get('PS_ATTRIBUTE_ANCHOR_SEPARATOR');
         foreach ($attributes as &$a) {
             foreach ($a as &$b) {
-                $b = str_replace($sep, '_', Tools::link_rewrite((string) $b));
+                $b = str_replace($sep, '_', Tools::str2url((string) $b));
             }
             $anchor .= '/' . ($with_id && isset($a['id_attribute']) && $a['id_attribute'] ? (int) $a['id_attribute'] . $sep : '') . $a['group'] . $sep . $a['name'];
         }
@@ -7899,9 +7676,9 @@ class ProductCore extends ObjectModel
 
         foreach ($this->name as $id_lang => $name) {
             if (empty($this->link_rewrite[$id_lang])) {
-                $this->link_rewrite[$id_lang] = Tools::link_rewrite($name);
+                $this->link_rewrite[$id_lang] = Tools::str2url($name);
             } elseif (!Validate::isLinkRewrite($this->link_rewrite[$id_lang])) {
-                $this->link_rewrite[$id_lang] = Tools::link_rewrite($this->link_rewrite[$id_lang]);
+                $this->link_rewrite[$id_lang] = Tools::str2url($this->link_rewrite[$id_lang]);
             }
         }
 
@@ -8256,5 +8033,26 @@ class ProductCore extends ObjectModel
         }
 
         return ProductType::TYPE_STANDARD;
+    }
+
+    /**
+     * Checks if product is still associated to its default shop, if not update with the first association found.
+     */
+    protected function updateDefaultShop(): void
+    {
+        $hasDefaultShopAssociation = Db::getInstance()->getValue(
+            'SELECT COUNT(p.id_product) FROM `' . _DB_PREFIX_ . 'product_shop` ps
+                     LEFT JOIN `' . _DB_PREFIX_ . 'product` p ON p.`id_product` = ps.`id_product` AND ps.`id_shop` = p.`id_shop_default`
+                     WHERE p.`id_product` = ' . (int) $this->id
+        );
+
+        if (!$hasDefaultShopAssociation) {
+            // Update default shop if needed, use the first associated shop (based on its ID) as the default fallback
+            $firstAssociatedShop = (int) Db::getInstance()->getValue('SELECT ps.`id_shop` AS id_shop FROM `' . _DB_PREFIX_ . 'product_shop` ps WHERE ps.`id_product` = ' . (int) $this->id . ' ORDER BY ps.`id_shop` ASC');
+            Db::getInstance()->update('product', [
+                'id_shop_default' => $firstAssociatedShop,
+            ], 'id_product = ' . (int) $this->id);
+            $this->id_shop_default = $firstAssociatedShop;
+        }
     }
 }
